@@ -3,3 +3,4 @@ build-support
 cmake-cache
 cmake-build-debug
 .vscode
+bindings
