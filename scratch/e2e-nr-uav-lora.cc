@@ -34,13 +34,17 @@ NS_LOG_COMPONENT_DEFINE("E2E_NR_UAV_LORA");
 using namespace ns3;
 using namespace lorawan;
 
-static bool g_rxPdcpCallbackCalled = false;
-static bool g_rxRxRlcPDUCallbackCalled = false;
-static void SendPacket(Ptr<NetDevice> device, Address& addr, uint32_t packetSize);
-void RxPdcpPDU(std::string path, uint16_t rnti, uint8_t lcid, uint32_t bytes, uint64_t pdcpDelay);
-void RxRlcPDU(std::string path, uint16_t rnti, uint8_t lcid, uint32_t bytes, uint64_t rlcDelay);
-void ConnectUlPdcpRlcTraces();
-void ConnectPdcpRlcTraces();
+Time sendPacketTime = Seconds(0.4);
+Time appStopTime = Seconds(20);
+
+static void Send3GPPPacket(Ptr<NetDevice> device, Address& bsAddr, Ptr<Packet> pkt);
+void SendLoRaPacket(Ptr<Packet> packet, Ptr<NetDevice> loraDevice, Ptr<NetDevice> uavDevice);
+void OnRxLoraPacket(Ptr<Packet const> packet, uint32_t systemId);
+void OnRx3GPPPacket(Ptr<Packet const> packet, uint32_t systemId);
+static void RouteNon3GPPPacket(Ptr<Packet> loraPacket,
+                               Ptr<NetDevice> uavDevice,
+                               Ptr<NetDevice> bsDevice);
+void PrintPacketData(Ptr<Packet> packet, std::string extra);
 
 /**
  * #####################################################################################
@@ -68,7 +72,6 @@ main(int argc, char* argv[])
     uint32_t n_uavs = 1;
     uint32_t n_bss = 1;
     uint32_t n_loraeds = 1;
-    Time sendPacketTime = Seconds(0.4);
     bool verbose = false;
 
     // Simulation parameters
@@ -84,19 +87,19 @@ main(int argc, char* argv[])
     if (verbose)
     {
         LogComponentEnable("E2E_NR_UAV_LORA", ns3::LOG_LEVEL_ALL);
-        LogComponentEnable("NetworkServer", LOG_LEVEL_ALL);
-        LogComponentEnable("GatewayLorawanMac", LOG_LEVEL_ALL);
-        LogComponentEnable("EndDeviceStatus", LOG_LEVEL_ALL);
-        LogComponentEnable("EndDeviceLorawanMac", LOG_LEVEL_ALL);
-        LogComponentEnable("ClassAEndDeviceLorawanMac", LOG_LEVEL_ALL);
-        LogComponentEnable("ThreeGppSpectrumPropagationLossModel", LOG_LEVEL_ALL);
-        LogComponentEnable("ThreeGppPropagationLossModel", LOG_LEVEL_ALL);
-        LogComponentEnable("ThreeGppChannelModel", LOG_LEVEL_ALL);
-        LogComponentEnable("ChannelConditionModel", LOG_LEVEL_ALL);
-        LogComponentEnable("UdpClient", LOG_LEVEL_INFO);
-        LogComponentEnable("UdpServer", LOG_LEVEL_INFO);
-        LogComponentEnable("LteRlcUm", LOG_LEVEL_LOGIC);
-        LogComponentEnable("LtePdcp", LOG_LEVEL_INFO);
+        //        LogComponentEnable("NetworkServer", LOG_LEVEL_ALL);
+        //        LogComponentEnable("GatewayLorawanMac", LOG_LEVEL_ALL);
+        //        LogComponentEnable("EndDeviceStatus", LOG_LEVEL_ALL);
+        //        LogComponentEnable("EndDeviceLorawanMac", LOG_LEVEL_ALL);
+        //        LogComponentEnable("ClassAEndDeviceLorawanMac", LOG_LEVEL_ALL);
+        //        LogComponentEnable("ThreeGppSpectrumPropagationLossModel", LOG_LEVEL_ALL);
+        //        LogComponentEnable("ThreeGppPropagationLossModel", LOG_LEVEL_ALL);
+        //        LogComponentEnable("ThreeGppChannelModel", LOG_LEVEL_ALL);
+        //        LogComponentEnable("ChannelConditionModel", LOG_LEVEL_ALL);
+        //        LogComponentEnable("UdpClient", LOG_LEVEL_INFO);
+        //        LogComponentEnable("UdpServer", LOG_LEVEL_INFO);
+        //        LogComponentEnable("LteRlcUm", LOG_LEVEL_LOGIC);
+        //        LogComponentEnable("LtePdcp", LOG_LEVEL_INFO);
     }
 
     if (n_uavs < 1 || n_bss < 1 || n_loraeds < 1)
@@ -183,22 +186,25 @@ main(int argc, char* argv[])
     nsHelper.SetGateways(uavNodes);
     nsHelper.Install(networkServer);
 
-    // Send LoRa packet
-    Time appStopTime = Seconds(20);
-    OneShotSenderHelper appHelper = OneShotSenderHelper();
-    appHelper.SetSendTime(sendPacketTime);
-    ApplicationContainer appContainer = appHelper.Install(loraNodes);
-    appContainer.Start(Seconds(0));
-    appContainer.Stop(appStopTime);
-    ForwarderHelper forHelper = ForwarderHelper();
-    forHelper.Install(uavNodes);
+    // Create a LoRa packet
+    Packet::EnablePrinting();
+    //    Packet::EnableChecking();
+
+    std::string payload = "LoRa";
+    Ptr<Packet> packet = Create<Packet>((uint8_t*)payload.c_str(), payload.size());
+    LoraTag loraTag = LoraTag();
+    LoraFrameHeader header = LoraFrameHeader();
+    LorawanMacHeader macHeader = LorawanMacHeader();
+    loraTag.SetSpreadingFactor(7);
+    header.SetAdr(uavNodes.Get(0)->GetId());
+    packet->AddPacketTag(loraTag);
+    packet->AddHeader(header);
 
     /** NR settings */
     uint16_t numerologyBwp1 = 0;
-    uint32_t udpPacketSize = 1000;
+    //    uint32_t udpPacketSize = 1000;
     double centralFrequencyBand1 = 28e9;
     double bandwidthBand1 = 400e6;
-    bool enableUl = true;
     Ptr<NrPointToPointEpcHelper> epcHelper = CreateObject<NrPointToPointEpcHelper>();
     Ptr<IdealBeamformingHelper> idealBeamformingHelper = CreateObject<IdealBeamformingHelper>();
     Ptr<NrHelper> nrHelper = CreateObject<NrHelper>();
@@ -247,9 +253,6 @@ main(int argc, char* argv[])
     randomStream += nrHelper->AssignStreams(enbNetDev, randomStream);
     randomStream += nrHelper->AssignStreams(ueNetDev, randomStream);
 
-    randomStream += nrHelper->AssignStreams(enbNetDev, randomStream);
-    randomStream += nrHelper->AssignStreams(ueNetDev, randomStream);
-
     // Set the attribute of the netdevice (enbNetDev.Get (0)) and bandwidth part (0)
     nrHelper->GetGnbPhy(enbNetDev.Get(0), 0)
         ->SetAttribute("Numerology", UintegerValue(numerologyBwp1));
@@ -269,40 +272,40 @@ main(int argc, char* argv[])
     Ipv4InterfaceContainer ueIpIface;
     ueIpIface = epcHelper->AssignUeIpv4Address(NetDeviceContainer(ueNetDev));
 
-    if (enableUl)
-    {
-        Simulator::Schedule(sendPacketTime + Seconds(0.1),
-                            &SendPacket,
-                            ueNetDev.Get(0),
-                            enbNetDev.Get(0)->GetAddress(),
-                            udpPacketSize);
-    }
-    else
-    {
-        Simulator::Schedule(sendPacketTime,
-                            &SendPacket,
-                            enbNetDev.Get(0),
-                            ueNetDev.Get(0)->GetAddress(),
-                            udpPacketSize);
-    }
-
     // attach UEs to the closest eNB
     nrHelper->AttachToClosestEnb(ueNetDev, enbNetDev);
 
-    if (enableUl)
+    // ADR LoRaWAN
+    ns3::lorawan::LorawanMacHelper::SetSpreadingFactorsUp(loraNodes, uavNodes, channel);
+
+    // Register trace callback for received packets
+    for (auto g = uavNodes.Begin(); g != uavNodes.End(); ++g)
     {
-        std::cout << "\n Sending data in uplink." << std::endl;
-        Simulator::Schedule(Seconds(0.2), &ConnectUlPdcpRlcTraces);
+        Ptr<Node> object = *g;
+        // Get the device
+        Ptr<NetDevice> uavNetDevice = object->GetDevice(0);
+        Ptr<LoraNetDevice> loraNetDevice = uavNetDevice->GetObject<LoraNetDevice>();
+        Ptr<GatewayLoraPhy> gwPhy = loraNetDevice->GetPhy()->GetObject<GatewayLoraPhy>();
+        gwPhy->TraceConnectWithoutContext("ReceivedPacket", MakeCallback(&OnRxLoraPacket));
     }
-    else
-    {
-        std::cout << "\n Sending data in downlink." << std::endl;
-        Simulator::Schedule(Seconds(0.2), &ConnectPdcpRlcTraces);
-    }
+
+//    nrHelper->TraceConnectWithoutContext("ReceivedPacket", MakeCallback(&OnRx3GPPPacket));
+
+    // Send LoRa to UAV
+    Simulator::Schedule(sendPacketTime,
+                        SendLoRaPacket,
+                        packet,
+                        loraNodes.Get(0)->GetDevice(0),
+                        uavNodes.Get(0)->GetDevice(0));
+
+    // add IP header to LoRa packet and send to BS gNB
+    Simulator::Schedule(sendPacketTime + Seconds(0.2),
+                        &RouteNon3GPPPacket,
+                        packet,
+                        uavNodes.Get(0)->GetDevice(0),
+                        nrNodes.Get(0)->GetDevice(0));
 
     nrHelper->EnableTraces();
-
-    ns3::lorawan::LorawanMacHelper::SetSpreadingFactorsUp(loraNodes, uavNodes, channel);
 
     Simulator::Stop(appStopTime);
     Simulator::Run();
@@ -324,74 +327,70 @@ main(int argc, char* argv[])
  * @param packetSize The packet size.
  */
 static void
-SendPacket(Ptr<NetDevice> device, Address& addr, uint32_t packetSize)
+Send3GPPPacket(Ptr<NetDevice> device, Address& bsAddr, Ptr<Packet> pkt)
 {
-    Ptr<Packet> pkt = Create<Packet>(packetSize);
-    Ipv4Header ipv4Header;
-    ipv4Header.SetProtocol(UdpL4Protocol::PROT_NUMBER);
-    pkt->AddHeader(ipv4Header);
     EpsBearerTag tag(1, 1);
     pkt->AddPacketTag(tag);
-    device->Send(pkt, addr, Ipv4L3Protocol::PROT_NUMBER);
+    pkt->Print(std::cout);
+    device->Send(pkt, bsAddr, Ipv4L3Protocol::PROT_NUMBER);
+    NS_LOG_INFO("Packet sent from UAV to BS device at " << Simulator::Now().GetSeconds() << "s");
+    //    PrintPacketData(pkt, "UAX Tx");
 }
 
-/**
- * Function that prints out PDCP delay. This function is designed as a callback
- * for PDCP trace source.
- * @param path The path that matches the trace source
- * @param rnti RNTI of UE
- * @param lcid logical channel id
- * @param bytes PDCP PDU size in bytes
- * @param pdcpDelay PDCP delay
- */
 void
-RxPdcpPDU(std::string path, uint16_t rnti, uint8_t lcid, uint32_t bytes, uint64_t pdcpDelay)
+OnRxLoraPacket(Ptr<Packet const> packet, uint32_t systemId)
 {
-    std::cout << "\n Packet PDCP delay:" << pdcpDelay << "\n";
-    g_rxPdcpCallbackCalled = true;
+    std::cout << "Received packet from LoRaWAN device " << systemId << std::endl
+              << "Packet size: " << packet->GetSize() << " bytes" << std::endl
+              << "Packet contents: " << packet->ToString()
+              << " Now: " << Simulator::Now().GetSeconds() << std::endl;
+    NS_LOG_INFO("Received packet from LoRa device at " << Simulator::Now().GetSeconds() << "s");
 }
 
-/**
- * Function that prints out RLC statistics, such as RNTI, lcId, RLC PDU size,
- * delay. This function is designed as a callback
- * for RLC trace source.
- * @param path The path that matches the trace source
- * @param rnti RNTI of UE
- * @param lcid logical channel id
- * @param bytes RLC PDU size in bytes
- * @param rlcDelay RLC PDU delay
- */
 void
-RxRlcPDU(std::string path, uint16_t rnti, uint8_t lcid, uint32_t bytes, uint64_t rlcDelay)
+OnRx3GPPPacket(Ptr<Packet const> packet, uint32_t systemId)
 {
-    std::cout << "\n\n Data received at RLC layer at:" << Simulator::Now() << "\n rnti:" << rnti
-              << "\n lcid:" << (unsigned)lcid << "\n bytes :" << bytes << "\n delay :" << rlcDelay
-              << std::endl;
-    g_rxRxRlcPDUCallbackCalled = true;
+    std::cout << "Received packet from UAV device " << systemId << std::endl
+              << "Packet size: " << packet->GetSize() << " bytes" << std::endl
+              << "Packet contents: " << packet->ToString()
+              << " Now: " << Simulator::Now().GetSeconds() << std::endl;
+    NS_LOG_INFO("Received packet from UAV device at " << Simulator::Now().GetSeconds() << "s");
 }
 
-/**
- * Function that connects PDCP and RLC traces to the corresponding trace sources.
- */
-void
-ConnectPdcpRlcTraces()
+static void
+RouteNon3GPPPacket(Ptr<Packet> loraPacket, Ptr<NetDevice> uavDevice, Ptr<NetDevice> bsDevice)
 {
-    Config::Connect("/NodeList/*/DeviceList/*/LteUeRrc/DataRadioBearerMap/1/LtePdcp/RxPDU",
-                    MakeCallback(&RxPdcpPDU));
+    // Change packet header LoRaWAN (IP) to NR (IP)
+    Ptr<Packet> nrPacket = loraPacket->Copy();
+    Ipv4Header ipv4Header;
+    ipv4Header.SetProtocol(UdpL4Protocol::PROT_NUMBER);
+    nrPacket->AddHeader(ipv4Header);
+    // todo: change packet header LoRaWAN (IP) to NR (IP)
+    NS_LOG_INFO("Scheduled to send packet from UAV to BS at " << Simulator::Now().GetSeconds()
+                                                              << "s");
+    Simulator::Schedule(sendPacketTime + Seconds(0.2),
+                        Send3GPPPacket,
+                        uavDevice,
+                        bsDevice->GetAddress(),
+                        nrPacket);
 
-    Config::Connect("/NodeList/*/DeviceList/*/LteUeRrc/DataRadioBearerMap/1/LteRlc/RxPDU",
-                    MakeCallback(&RxRlcPDU));
 }
 
-/**
- * Function that connects UL PDCP and RLC traces to the corresponding trace sources.
- */
 void
-ConnectUlPdcpRlcTraces()
+SendLoRaPacket(Ptr<Packet> packet, Ptr<NetDevice> loraDevice, Ptr<NetDevice> uavDevice)
 {
-    Config::Connect("/NodeList/*/DeviceList/*/LteEnbRrc/UeMap/*/DataRadioBearerMap/*/LtePdcp/RxPDU",
-                    MakeCallback(&RxPdcpPDU));
+    loraDevice->Send(packet, uavDevice->GetAddress(), 0);
+    packet->Print(std::cout);
+    NS_LOG_INFO("LoRa packet sent to UAV at " << Simulator::Now().GetSeconds() << "s");
+}
 
-    Config::Connect("/NodeList/*/DeviceList/*/LteEnbRrc/UeMap/*/DataRadioBearerMap/*/LteRlc/RxPDU",
-                    MakeCallback(&RxRlcPDU));
+void
+PrintPacketData(Ptr<Packet> packet, std::string extra)
+{
+    // Recuperação da mensagem do pacote recebido
+    uint8_t buffer[packet->GetSize()];
+    packet->CopyData(buffer, packet->GetSize());
+    std::string receivedMessage(reinterpret_cast<char*>(buffer), packet->GetSize());
+    //    NS_LOG_INFO( "Mensagem recebida: " << receivedMessage << " " << extra );
+    packet->Print(std::cout);
 }
