@@ -37,6 +37,7 @@
 #include "ns3/forwarder-helper.h"
 #include "ns3/lorawan-module.h"
 #include "ns3/propagation-module.h"
+#include "ns3/lora-utils.h"
 #include <algorithm>
 #include <ctime>
 #include <iomanip>
@@ -201,12 +202,6 @@ UnderSensitivityCallback (Ptr<Packet const> packet, uint32_t systemId)
       (*it).second.outcomeNumber += 1;
     }
   CheckReceptionByAllGWsComplete (it);
-}
-
-uint8_t
-SFToDR (uint8_t sf)
-{
-  return (12 - sf);
 }
 
 /**
