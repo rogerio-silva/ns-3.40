@@ -5,5 +5,7 @@
     <mapping directory="$PROJECT_DIR$" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/contrib/lorawan" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/contrib/nr" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/contrib/opengym" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/../../william/uav-positioning-metaheuristics" vcs="Git" />
   </component>
 </project>

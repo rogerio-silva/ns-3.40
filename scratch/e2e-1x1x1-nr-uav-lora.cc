@@ -49,7 +49,6 @@ void OnRx3GPPPacket(std::string context,
 static void RouteNon3GPPPacket(Ptr<Packet> loraPacket,
                                Ptr<NetDevice> uavDevice,
                                Ptr<NetDevice> bsDevice);
-void PrintPacketData(Ptr<Packet> packet, LoraFrameHeader header);
 
 /**
  * #####################################################################################
@@ -60,7 +59,7 @@ void PrintPacketData(Ptr<Packet> packet, LoraFrameHeader header);
  *     © © © © )))       NON3GPP         ((( |O| )))         3GPP                /X\
  *   ©© © © ©                                X X                                /XXX\
  * -------------------------------------------------------------------------------------
- * Devices Lorawan                           UAVs                           BSs 5G/B5G
+ * Devices Lorawan                           UAV                              BS 5G/B5G
  * -------------------------------------------------------------------------------------
  *                                            ^
  *                                       LoRa to 3GPP
@@ -74,12 +73,9 @@ main(int argc, char* argv[])
     NodeContainer uavNodes;
     NodeContainer nrNodes;
     NodeContainer loraNodes;
-    uint32_t n_uavs = 2;
-    uint32_t n_bss = 4;
-    uint32_t n_loraeds = 10;
-
-    uint32_t packetSize = 50;
-
+    uint32_t n_uavs = 1;
+    uint32_t n_bss = 1;
+    uint32_t n_loraeds = 1;
     bool verbose = false;
     std::string outputDir = ".";
     std::string simTag = "e2e-nr-uav-lora";
@@ -134,23 +130,9 @@ main(int argc, char* argv[])
     Ptr<ListPositionAllocator> uavsPositions = CreateObject<ListPositionAllocator>();
     Ptr<ListPositionAllocator> bssPositions = CreateObject<ListPositionAllocator>();
     Ptr<ListPositionAllocator> loraedsPositions = CreateObject<ListPositionAllocator>();
-    bssPositions->Add(Vector(1000, 1000, 25));
-    bssPositions->Add(Vector(9000, 1000, 25));
-    bssPositions->Add(Vector(1000, 9000, 25));
-    bssPositions->Add(Vector(9000, 9000, 25));
-    uavsPositions->Add(Vector(5000, 2500, 45));
-    uavsPositions->Add(Vector(5000, 7500, 45));
+    bssPositions->Add(Vector(0, 0, 25));
+    uavsPositions->Add(Vector(500, 500, 45));
     loraedsPositions->Add(Vector(1000, 1000, 1.5));
-    loraedsPositions->Add(Vector(7486.25, 3891.25, 2.67922));
-    loraedsPositions->Add(Vector(6644.3, 3147.35, 2.26663));
-    loraedsPositions->Add(Vector(7845.26, 3512.17, 1.02033));
-    loraedsPositions->Add(Vector(511.919, 787.191, 1.67687));
-    loraedsPositions->Add(Vector(1183.11, 1034.87, 1.94575));
-    loraedsPositions->Add(Vector(5816.03, 6518.14, 2.3152));
-    loraedsPositions->Add(Vector(4436.1, 7996.76, 1.82753));
-    loraedsPositions->Add(Vector(482.11, 7476.17, 1.05852));
-    loraedsPositions->Add(Vector(1679.28, 7818.74, 1.16566));
-    loraedsPositions->Add(Vector(7250.04, 5987.8, 1.19633));
     mobilityBS.SetPositionAllocator(bssPositions);
     mobilityUAV.SetPositionAllocator(uavsPositions);
     mobilityED.SetPositionAllocator(loraedsPositions);
@@ -212,21 +194,24 @@ main(int argc, char* argv[])
     nsHelper.SetGateways(uavNodes);
     nsHelper.Install(networkServer);
 
-//    // Create a LoRa packet
-//    std::string payload = "LoRa-3GPP Packet";
-//    Packet::EnablePrinting();
-//    Packet::EnableChecking();
-//    Ptr<Packet> packet = Create<Packet>((uint8_t*)payload.c_str(), payload.size() + 1);
-//    LoraTag loraTag = LoraTag();
-//    LoraFrameHeader header = LoraFrameHeader();
-//    //    LorawanMacHeader macHeader = LorawanMacHeader();
-//    loraTag.SetSpreadingFactor(7);
-//    header.SetAddress(addrGen->GetNextAddress());
-//    packet->AddPacketTag(loraTag);
-//    packet->AddHeader(header);
+    // Create a LoRa packet
+    std::string payload = "LoRa-3GPP Packet";
+    Packet::EnablePrinting();
+    Packet::EnableChecking();
+    Ptr<Packet> packet = Create<Packet>((uint8_t*)payload.c_str(), payload.size() + 1);
+    LoraTag loraTag = LoraTag();
+    LoraFrameHeader header = LoraFrameHeader();
+    //    LorawanMacHeader macHeader = LorawanMacHeader();
+    loraTag.SetSpreadingFactor(12);
+    header.SetAddress(addrGen->GetNextAddress());
+    packet->AddPacketTag(loraTag);
+    packet->AddHeader(header);
 
-//    // Print packet data
-//    PrintPacketData(packet, header);
+    // Print packet data
+    auto* buffer = new uint8_t[packet->GetSize()];
+    uint32_t size = packet->CopyData(buffer, packet->GetSize());
+    std::string s = std::string(buffer + header.GetSerializedSize(), buffer + size - 1);
+    NS_LOG_INFO("Packet: [" << s << "] created at " << Simulator::Now().GetSeconds() << "s");
 
     /** NR settings */
     uint16_t numerologyBwp1 = 0;
@@ -301,7 +286,6 @@ main(int argc, char* argv[])
     {
         DynamicCast<NrUeNetDevice>(*it)->UpdateConfig();
     }
-
     InternetStackHelper internet;
     internet.Install(uavNodes);
     Ipv4InterfaceContainer ueIpIface;
@@ -324,27 +308,19 @@ main(int argc, char* argv[])
         gwPhy->TraceConnectWithoutContext("ReceivedPacket", MakeCallback(&OnRxLoraPacket));
     }
 
-    // LoRa Application
-    Time appPeriodSeconds = Seconds (20);
-    PeriodicSenderHelper appHelper = PeriodicSenderHelper ();
-    appHelper.SetPeriod (appPeriodSeconds);
-    appHelper.SetPacketSize (packetSize);
-    ApplicationContainer appContainer = appHelper.Install (loraNodes);
+    // Schedule to send LoRa to UAV
+    Simulator::Schedule(sendPacketTime,
+                        SendLoRaPacket,
+                        packet,
+                        loraNodes.Get(0)->GetDevice(0),
+                        uavNodes.Get(0)->GetDevice(0));
 
     // schedule to add IP header to LoRa packet and send to BS gNB
-    // Route packets to BSs
-
-    for (auto it = uavNodes.Begin(); it != uavNodes.End(); ++it)
-    {
-        Ptr<Node> object = *it;
-        Ptr<NetDevice> uavNetDevice = object->GetDevice(0);
-        for (auto jt = loraNodes.Begin(); jt != loraNodes.End(); ++jt)
-        {
-            Ptr<Node> loraNode = *jt;
-            Ptr<NetDevice> loraNetDevice = loraNode->GetDevice(0);
-            Simulator::Schedule(sendPacketTime, RouteNon3GPPPacket, appHelper.CreatePacket(), uavNetDevice, loraNetDevice);
-        }
-    }
+    Simulator::Schedule(sendPacketTime + Seconds(0.2),
+                        &RouteNon3GPPPacket,
+                        packet,
+                        uavNodes.Get(0)->GetDevice(2),
+                        nrNodes.Get(0)->GetDevice(0));
 
     FlowMonitorHelper flowmonHelper;
     NodeContainer endpointNodes;
@@ -434,7 +410,7 @@ config.ConfigureAttributes ();
         outFile << "  Rx Packets: " << i->second.rxPackets << "\n";
     }
 
-    if (!stats.empty())
+    if(!stats.empty())
     {
         outFile << "\n\n  Number of flows: " << stats.size() << "\n";
 
@@ -534,12 +510,4 @@ SendLoRaPacket(Ptr<Packet> packet, Ptr<NetDevice> loraDevice, Ptr<NetDevice> uav
     std::string s = std::string(buffer, buffer + size - 1);
     NS_LOG_INFO("LoRa packet [" << s << "] sent to UAV at " << Simulator::Now().GetSeconds()
                                 << "s");
-}
-
-void PrintPacketData(Ptr<Packet> packet, LoraFrameHeader header)
-{
-    auto* buffer = new uint8_t[packet->GetSize()];
-    uint32_t size = packet->CopyData(buffer, packet->GetSize());
-    std::string s = std::string(buffer + header.GetSerializedSize(), buffer + size - 1);
-    NS_LOG_INFO("Packet: [" << s << "] created at " << Simulator::Now().GetSeconds() << "s");
 }

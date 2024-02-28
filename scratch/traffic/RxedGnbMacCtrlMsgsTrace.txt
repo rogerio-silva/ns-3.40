@@ -1,0 +1,3 @@
+Time	Entity	Frame	SF	Slot	VarTTI	nodeId	RNTI	bwpId	MsgType
+0.018	ENB MAC Rxed	1	7	0	2	0	0	RACH_PREAMBLE
+0.604	ENB MAC Rxed	60	4	0	2	1	0	SR

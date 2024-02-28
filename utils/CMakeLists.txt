@@ -13,7 +13,7 @@ if(${ENABLE_TESTS})
 
     # Define the libtest as an object to build test-runner
     set(test_sources $<TARGET_OBJECTS:${libtest}>
-            ../scratch/e2e-nr-uav-lora.cc)
+            ../scratch/e2e-1x1x1-nr-uav-lora.cc)
   endif()
 
   if(WIN32)
