@@ -391,7 +391,7 @@ main (int argc, char *argv[])
 
   NS_LOG_INFO ("Creating end devices...");
   // Create a set of nodes
-  EndDevicesPlacement ("/home/rogerio/git/sim-res/"
+  NodesPlacement ("/home/rogerio/git/sim-res/"
                        "datafile/devices/placement/endDevices_LNM_Placement_" +
                        std::to_string (seed) + "s+" + std::to_string (nDevices) + "d.dat");
 

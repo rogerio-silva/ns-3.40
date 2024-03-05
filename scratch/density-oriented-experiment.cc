@@ -399,7 +399,7 @@ main (int argc, char *argv[])
 
   NS_LOG_INFO ("Creating end devices...");
   // Create a set of nodes
-  EndDevicesPlacement ("/home/rogerio/git/sim-res/"
+  NodesPlacement("/home/rogerio/git/sim-res/"
                        "datafile/devices/placement/endDevices_LNM_Placement_" +
                        std::to_string (seed) + "s+" + std::to_string (nDevices) + "d.dat");
 
@@ -417,7 +417,7 @@ main (int argc, char *argv[])
   helper.Install (phyHelper, macHelper, endDevices);
 
   // Connect trace sources
-  for (NodeContainer::Iterator j = endDevices.Begin (); j != endDevices.End (); ++j)
+  for (auto j = endDevices.Begin (); j != endDevices.End (); ++j)
     {
       Ptr<Node> node = *j;
       Ptr<LoraNetDevice> loraNetDevice = node->GetDevice (0)->GetObject<LoraNetDevice> ();
@@ -444,7 +444,7 @@ main (int argc, char *argv[])
   macHelper.SetDeviceType (LorawanMacHelper::GW);
   helper.Install (phyHelper, macHelper, gateways);
 
-  for (NodeContainer::Iterator g = gateways.Begin (); g != gateways.End (); ++g)
+  for (auto g = gateways.Begin (); g != gateways.End (); ++g)
     {
       Ptr<Node> object = *g;
       // Get the device
@@ -532,7 +532,7 @@ main (int argc, char *argv[])
       const char *cPK = packs_filename.c_str ();
       std::ofstream filePKT;
       filePKT.open (cPK, std::ios::out);
-      for (std::map<Ptr<Packet const>, myPacketStatus>::iterator p = packetTracker.begin ();
+      for (auto p = packetTracker.begin ();
            p != packetTracker.end (); ++p)
         {
           filePKT << (*p).second.senderId << " " << (*p).second.receiverId << " "
@@ -584,7 +584,7 @@ main (int argc, char *argv[])
       const char *cG = phyPerfPerGatewayFile.c_str ();
       std::ofstream fileG;
       fileG.open (cG, std::ios::out);
-      for (NodeContainer::Iterator j = gateways.Begin (); j != gateways.End (); ++j)
+      for (auto j = gateways.Begin (); j != gateways.End (); ++j)
         {
           Ptr<Node> object = *j;
           // exec_number gateway_id totPacketsSent receivedPackets interferedPackets noMoreGwPackets underSensitivityPackets lostBecauseTxPackets
