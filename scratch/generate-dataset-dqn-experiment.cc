@@ -51,6 +51,7 @@
 
 #include <algorithm>
 #include <iomanip>
+#include <filesystem>
 
 using namespace ns3;
 using namespace lorawan;
@@ -61,6 +62,10 @@ NodeContainer endDevices;
 NodeContainer gateways;
 Ptr<LoraChannel> channel;
 MobilityHelper mobilityED, mobilityGW;
+
+#define MAX_DR 6835.94
+#define MIN_DR 183.11
+#define PKT_SIZE 400
 
 int nDevices = 0;
 int nGateways = 0;
@@ -157,10 +162,10 @@ CheckReceptionByAllGWsComplete(std::map<Ptr<const Packet>, myPacketStatus>::iter
             }
         }
         // Update packet statistics without gateway repetition
-        received = (rec>0) ? received + 1 : received;
-        underSensitivity = (under>0) ? underSensitivity + 1 : underSensitivity;
-        noMoreReceivers = (noMore>0) ? noMoreReceivers + 1 : noMoreReceivers;
-        interfered = (inter>0) ? interfered + 1 : interfered;
+        received = (rec > 0) ? received + 1 : received;
+        underSensitivity = (under > 0) ? underSensitivity + 1 : underSensitivity;
+        noMoreReceivers = (noMore > 0) ? noMoreReceivers + 1 : noMoreReceivers;
+        interfered = (inter > 0) ? interfered + 1 : interfered;
     }
 }
 
@@ -225,7 +230,7 @@ InterferenceCallback(Ptr<const Packet> packet, uint32_t systemId)
     NS_LOG_INFO("A packet was lost because of interference at gateway " << systemId);
 
     auto it = packetTracker.find(packet);
-    if ((*it).second.outcomes.size() > systemId - nDevices)
+    if (it != packetTracker.end() && (*it).second.outcomes.size() > systemId - nDevices)
     {
         (*it).second.outcomes.at(systemId - nDevices) = _INTERFERED;
         (*it).second.outcomeNumber += 1;
@@ -239,7 +244,7 @@ NoMoreReceiversCallback(Ptr<const Packet> packet, uint32_t systemId)
     NS_LOG_INFO("A packet was lost because there were no more receivers at gateway " << systemId);
 
     auto it = packetTracker.find(packet);
-    if ((*it).second.outcomes.size() > systemId - nDevices)
+    if (it != packetTracker.end() && (*it).second.outcomes.size() > systemId - nDevices)
     {
         (*it).second.outcomes.at(systemId - nDevices) = _NO_MORE_RECEIVERS;
         (*it).second.outcomeNumber += 1;
@@ -253,7 +258,7 @@ UnderSensitivityCallback(Ptr<const Packet> packet, uint32_t systemId)
     NS_LOG_INFO("A packet arrived at the gateway under sensitivity at gateway " << systemId);
 
     auto it = packetTracker.find(packet);
-    if ((*it).second.outcomes.size() > systemId - nDevices)
+    if (it != packetTracker.end() && (*it).second.outcomes.size() > systemId - nDevices)
     {
         (*it).second.outcomes.at(systemId - nDevices) = _UNDER_SENSITIVITY;
         (*it).second.outcomeNumber += 1;
@@ -303,42 +308,17 @@ NodesPlacement(std::string filename)
     mobilityED.Install(endDevices);
 }
 
-void
-PrintEndDevicesParameters(std::string filename)
-{
-    const char* c = filename.c_str();
-    std::ofstream spreadingFactorFile;
-    spreadingFactorFile.open(c);
-    for (auto ed = endDevices.Begin(); ed != endDevices.End(); ++ed)
-    {
-        Ptr<Node> oDevice = *ed;
-        Ptr<NetDevice> netDevice = oDevice->GetDevice(0);
-        Ptr<LoraNetDevice> loraNetDevice = netDevice->GetObject<LoraNetDevice>();
-        NS_ASSERT(loraNetDevice != nullptr);
-        Ptr<EndDeviceLorawanMac> mac = loraNetDevice->GetMac()->GetObject<EndDeviceLorawanMac>();
-        int sf = mac->GetSfFromDataRate(mac->GetDataRate());
-        int txPower = mac->GetTransmissionPower();
-        //      spreadingFactorFile << oGateway->GetId () << " " << oDevice->GetId () << " " <<
-        //      distanceFromGW << " " << sf << " "
-        //                              << txPower <<  std::endl;
-        // file header: <device_id> <sf> <txPower> <datarate>
-        spreadingFactorFile << oDevice->GetId() << " " << sf << " " << txPower << " "
-                            << (sf * (125000 / (pow(2, sf))) * (4 / 5.0)) << std::endl;
-    }
-    spreadingFactorFile.close();
-}
-
 int
 main(int argc, char* argv[])
 {
     double simulationTime = 1200;
     int appPeriodSeconds = 30;
-    bool okumura = false;
     bool printRates = true;
     bool verbose = false;
     int seed = 1;
     bool up = false;
     int packetSize = 41;
+    int state = 0;
     std::string tGatewaysPositions = "";
     std::string resultsFolder = "/home/rogerio/git/dqn-sim-res/pre-datasets/results";
     std::string originFolder = "/home/rogerio/git/dqn-sim-res/origin";
@@ -346,12 +326,12 @@ main(int argc, char* argv[])
     CommandLine cmd;
     cmd.AddValue("nDevices", "Number of end devices to include in the simulation", nDevices);
     cmd.AddValue("nGateways", "Number of gateways to include in the simulation", nGateways);
-    cmd.AddValue("okumura", "Uses okumura-hate propagation mode", okumura);
     cmd.AddValue("verbose", "Whether to print output or not", verbose);
     cmd.AddValue("printRates", "Whether to print result rates", printRates);
-    cmd.AddValue("seed", "Whether to print result rates", seed);
+    cmd.AddValue("seed", "Seed to set random generation numbers ", seed);
     cmd.AddValue("up", "Spread Factor UP", up);
     cmd.AddValue("tGatewaysPositions", "Gateway positions", tGatewaysPositions);
+    cmd.AddValue("state", "State", state);
     cmd.AddValue("resultsFolder", "Results folder", resultsFolder);
     cmd.AddValue("originFolder", "Results folder", originFolder);
     cmd.Parse(argc, argv);
@@ -396,20 +376,12 @@ main(int argc, char* argv[])
      *  Create the channel  *
      ************************/
     // Create the lora channel object
-    // modelo de propagação (okumura ou logdistance)
+    // modelo de propagação log-distance
     Ptr<PropagationDelayModel> delay = CreateObject<ConstantSpeedPropagationDelayModel>();
-    if (okumura)
-    {
-        Ptr<OkumuraHataPropagationLossModel> loss = CreateObject<OkumuraHataPropagationLossModel>();
-        channel = CreateObject<LoraChannel>(loss, delay);
-    }
-    else
-    {
-        Ptr<LogDistancePropagationLossModel> loss = CreateObject<LogDistancePropagationLossModel>();
-        loss->SetPathLossExponent(3.76);
-        loss->SetReference(1, 10.0);
-        channel = CreateObject<LoraChannel>(loss, delay);
-    }
+    Ptr<LogDistancePropagationLossModel> loss = CreateObject<LogDistancePropagationLossModel>();
+    loss->SetPathLossExponent(3.76);
+    loss->SetReference(1, 10.0);
+    channel = CreateObject<LoraChannel>(loss, delay);
 
     /************************
      *  Create the helpers  *
@@ -512,7 +484,8 @@ main(int argc, char* argv[])
     appContainer.Start(Seconds(0));
     appContainer.Stop(appStopTime);
 
-    if (up){
+    if (up)
+    {
         ns3::lorawan::LorawanMacHelper::SetSpreadingFactorsUp(endDevices, gateways, channel);
     }
 
@@ -552,86 +525,56 @@ main(int argc, char* argv[])
         /**
          * Print COMM PARAMETERS
          * **/
-        std::string par_filename = resultsFolder + "/transmissionParameters_" +
-                                   std::to_string(seed) + "_" + std::to_string(nGateways) + "x" +
-                                   std::to_string(nDevices) + ".dat";
-        // file header: <device_id> <sf> <txPower> <datarate>
-        PrintEndDevicesParameters(par_filename);
-
-        /**
-         * Print PACKETS
-         * **/
-
-        std::string packs_filename = resultsFolder + "/transmissionPackets_" +
-                                     std::to_string(seed) + "_" + std::to_string(nGateways) + "x" +
-                                     std::to_string(nDevices) + ".dat";
-        const char* cPK = packs_filename.c_str();
+        // File tag: <seed>_<state>_<nGateways>x<nDevices> e.g. 1_1_3x10
+        std::string qos_filename = resultsFolder + "/qos_" + std::to_string (nGateways)+ ".dat";
+        const char* cQoS_K = qos_filename.c_str();
         std::ofstream filePKT;
-        filePKT.open(cPK, std::ios::out);
-        // File header <senderId> <receiverId> <sentTime> <receivedTime> <delay>
+
+        if (std::filesystem::exists(qos_filename)){
+            filePKT.open(cQoS_K, std::ios::app);
+        } else {
+            filePKT.open(cQoS_K, std::ios::out);
+            // file header: <state> <qos>
+            filePKT << "state qos" << std::endl;
+        }
+
+        int dev_sf;
+        int numPackets = 0;
+        double dev_dr;
+        double pack_delay;
+        double dev_qos;
+        double sum_qos = 0;
+
+        //        dfQos['qos'] = dfQos['dr'] / 6835.94 + (1 - dfQos['delay'] / (400 / 183.11))
         for (auto p = packetTracker.begin(); p != packetTracker.end(); ++p)
         {
-            filePKT << (*p).second.senderId << " " << (*p).second.receiverId << " "
-                    << (*p).second.sentTime.GetSeconds() << " "
-                    << (*p).second.receivedTime.GetSeconds() << " "
-                    << (*p).second.receivedTime.GetSeconds() - (*p).second.sentTime.GetSeconds()
-                    << std::endl;
+            uint32_t dev = (*p).second.senderId;
+            dev_sf = endDevices.Get(dev)
+                         ->GetDevice(0)
+                         ->GetObject<LoraNetDevice>()
+                         ->GetMac()
+                         ->GetObject<EndDeviceLorawanMac>()
+                         ->GetSfFromDataRate(endDevices.Get(dev)
+                                                 ->GetDevice(0)
+                                                 ->GetObject<LoraNetDevice>()
+                                                 ->GetMac()
+                                                 ->GetObject<EndDeviceLorawanMac>()
+                                                 ->GetDataRate());
+            dev_dr = (dev_sf * (125000 / (pow(2, dev_sf))) * (4 / 5.0));
+            pack_delay =
+                (*p).second.receivedTime.GetSeconds() - (*p).second.sentTime.GetSeconds() >= 0
+                    ? (*p).second.receivedTime.GetSeconds() - (*p).second.sentTime.GetSeconds()
+                    : 0;
+
+            dev_qos = dev_dr / MAX_DR + (1 - pack_delay / (PKT_SIZE / MIN_DR));
+            numPackets++;
+            sum_qos += dev_qos;
         }
+        filePKT << state << " " << sum_qos / numPackets << std::endl;
         filePKT.close();
     }
 
     Simulator::Destroy();
-
-    if (printRates)
-    {
-        NS_LOG_INFO("Computing performance metrics...");
-        LoraPacketTracker& tracker = helper.GetPacketTracker();
-
-        /**
-         * Print GLOBAL PACKET DELIVERY
-         * **/
-
-        std::string phyPerformanceFile = resultsFolder + "/transmissionData_" +
-                                         std::to_string(nGateways) + "x" +
-                                         std::to_string(nDevices) + ".dat";
-        const char* c = phyPerformanceFile.c_str();
-        std::ofstream file;
-        file.open(c, std::ios::app);
-        if (!file)
-        {
-            file.open(c, std::ios::out);
-        }
-        // File header <seed> <totalPacketsSent> <receivedPackets>.
-        file << seed << " "
-             << tracker.CountMacPacketsGlobally(Seconds(0), appStopTime + Minutes(10)) << std::endl;
-        file.close();
-
-        /**
-         * Print PACKET DELIVERY PER GATEWAY
-         * **/
-
-        //        std::string phyPerfPerGatewayFile = resultsFolder + "/transmissionDataPerGateway_"
-        //        +
-        //                                            std::to_string(seed) + "_" +
-        //                                            std::to_string(nGateways) + "x" +
-        //                                            std::to_string(nDevices) + ".dat";
-        //        const char* cG = phyPerfPerGatewayFile.c_str();
-        //        std::ofstream fileG;
-        //        fileG.open(cG, std::ios::out);
-        //        for (auto j = gateways.Begin(); j != gateways.End(); ++j)
-        //        {
-        //            Ptr<Node> object = *j;
-        //            // File Header:
-        // <seed> <gateway_id> <totPacketsSent> <receivedPackets> <interferedPackets>
-        //            // <noMoreGwPackets> <underSensitivityPackets> <lostBecauseTxPackets>
-        //            fileG << seed << " " << object->GetId() << " "
-        //                  << tracker.PrintPhyPacketsPerGw(Seconds(0),
-        //                                                  appStopTime + Minutes(10),
-        //                                                  object->GetId())
-        //                  << std::endl;
-        //        }
-        //        fileG.close();
-    }
 
     return 0;
 }
